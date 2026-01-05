@@ -1,106 +1,58 @@
 import streamlit as st
-import pandas as pd
-import joblib
-import numpy as np
-import matplotlib.pyplot as plt
+from expected_value import expected_stat
+from probability import probability_over, implied_probability
 
-from scripts.probability_engine import (
-    implied_probability,
-    kelly_fraction
-)
-from scripts.monte_carlo import monte_carlo_prob
+st.set_page_config(layout="wide")
+st.title("NBA Manual Prop Probability Engine")
 
-st.set_page_config(page_title="NBA Prop Betting Engine", layout="wide")
-
-@st.cache_data
-def load_data():
-    return pd.read_csv("data/processed/model_data.csv")
-
-@st.cache_resource
-def load_models():
-    stat_model = joblib.load("models/nba_stat_model.pkl")
-    min_model = joblib.load("models/minutes_model.pkl")
-    return stat_model, min_model
-
-df = load_data()
-stat_model, min_model = load_models()
-
-TARGETS = ["PTS", "REB", "AST", "FG3M", "STL", "BLK", "TOV"]
-
-st.title("NBA Player Prop Probability Engine")
-
-# ---------------- SIDEBAR ----------------
-st.sidebar.header("Prop Inputs")
-
-player = st.sidebar.selectbox(
-    "Player",
-    sorted(df["PLAYER_NAME"].unique())
+stat_type = st.selectbox(
+    "Stat Type",
+    ["PTS","REB","AST","FG3M","STL","BLK","TOV"]
 )
 
-stat = st.sidebar.selectbox("Stat", TARGETS)
-line = st.sidebar.number_input("Prop Line", value=20.5)
-odds = st.sidebar.number_input("Odds (American)", value=-110)
+line = st.number_input("Sportsbook Line", value=20.5)
+odds = st.number_input("American Odds", value=-110)
 
-player_df = df[df["PLAYER_NAME"] == player].sort_values("GAME_DATE")
-latest = player_df.tail(1)
+st.subheader("Projection Inputs")
 
-# ---------------- MINUTES ----------------
-min_features = latest[["MIN_avg_5", "MIN_avg_10", "HOME"]]
-expected_minutes = min_model.predict(min_features)[0]
+col1, col2 = st.columns(2)
 
-# ---------------- STAT PROJECTION ----------------
-X_latest = latest.drop(
-    columns=TARGETS + ["GAME_DATE", "MATCHUP", "PLAYER_NAME"]
+with col1:
+    minutes = st.number_input("Projected Minutes", value=34.0)
+    stat_per_min = st.number_input("Stat per Minute", value=0.75)
+    recent_form = st.number_input("Recent Form Adjustment", value=1.00)
+    usage_adj = st.number_input("Usage Adjustment", value=1.00)
+
+with col2:
+    opp_def_adj = st.number_input("Opponent Defense Adjustment", value=1.00)
+    pace_adj = st.number_input("Pace Adjustment", value=1.00)
+    home_adj = st.number_input("Home/Away Adjustment", value=1.00)
+
+std = st.number_input(
+    "Standard Deviation (Normal stats only)",
+    value=4.5
 )
 
-mu = stat_model.predict(X_latest)[0][TARGETS.index(stat)]
+if st.button("Calculate Probability"):
 
-# ---------------- PROBABILITY ----------------
-model_prob = monte_carlo_prob(
-    player_df,
-    stat,
-    expected_minutes,
-    line
-)
+    mean = expected_stat(
+        minutes,
+        stat_per_min,
+        recent_form,
+        usage_adj,
+        opp_def_adj,
+        pace_adj,
+        home_adj
+    )
 
-book_prob = implied_probability(odds)
-edge = model_prob - book_prob
-kelly = kelly_fraction(model_prob, odds) * 0.5  # half Kelly
+    prob_over = probability_over(mean, line, stat_type, std)
+    implied = implied_probability(odds)
+    edge = prob_over - implied
 
-# ---------------- DISPLAY METRICS ----------------
-c1, c2, c3, c4 = st.columns(4)
+    st.subheader("Results")
 
-c1.metric("Projected Mean", f"{mu:.2f}")
-c2.metric("Model Probability", f"{model_prob:.1%}")
-c3.metric("Edge", f"{edge:.1%}")
-c4.metric("Kelly %", f"{kelly:.1%}")
+    col1, col2, col3 = st.columns(3)
 
-# ---------------- VERDICT ----------------
-if edge > 0.05:
-    st.success("STRONG +EV BET")
-elif edge > 0.03:
-    st.info("PLAYABLE EDGE")
-else:
-    st.error("NO BET")
-
-# ---------------- DISTRIBUTION ----------------
-st.subheader("Monte Carlo Distribution")
-
-sims = []
-per_min = (player_df[stat] / player_df["MIN"]).dropna()
-samples = np.random.choice(per_min, size=5000, replace=True)
-sims = samples * expected_minutes
-
-fig, ax = plt.subplots()
-ax.hist(sims, bins=40)
-ax.axvline(line)
-st.pyplot(fig)
-
-# ---------------- RECENT GAMES ----------------
-st.subheader("Last 10 Games")
-st.dataframe(
-    player_df.tail(10)[
-        ["GAME_DATE", "MIN"] + TARGETS
-    ],
-    use_container_width=True
-)
+    col1.metric("Projected Mean", round(mean,2))
+    col2.metric("Model Probability (Over)", f"{prob_over:.2%}")
+    col3.metric("Edge", f"{edge:.2%}")
