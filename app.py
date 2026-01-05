@@ -1,9 +1,23 @@
 import streamlit as st
+import pandas as pd
 from expected_value import expected_stat
 from probability import probability_over, implied_probability
 
 st.set_page_config(layout="wide")
-st.title("NBA Manual Prop Probability Engine")
+st.title("NBA Daily Prop Probability Engine")
+
+# --- Load daily CSV ---
+@st.cache_data
+def load_data():
+    return pd.read_csv("data/daily_player_adjustments.csv")
+
+df = load_data()
+
+# --- Select player ---
+player_names = df['player_name'].unique()
+player_name = st.selectbox("Select Player", player_names)
+
+player_row = df[df['player_name'] == player_name].iloc[0]
 
 stat_type = st.selectbox(
     "Stat Type",
@@ -13,46 +27,38 @@ stat_type = st.selectbox(
 line = st.number_input("Sportsbook Line", value=20.5)
 odds = st.number_input("American Odds", value=-110)
 
-st.subheader("Projection Inputs")
+# --- Calculate expected stat ---
+stat_per_min_col = f"{stat_type}_per_min"
+recent_form_col = f"recent_form_{stat_type}"
 
-col1, col2 = st.columns(2)
-
-with col1:
-    minutes = st.number_input("Projected Minutes", value=34.0)
-    stat_per_min = st.number_input("Stat per Minute", value=0.75)
-    recent_form = st.number_input("Recent Form Adjustment", value=1.00)
-    usage_adj = st.number_input("Usage Adjustment", value=1.00)
-
-with col2:
-    opp_def_adj = st.number_input("Opponent Defense Adjustment", value=1.00)
-    pace_adj = st.number_input("Pace Adjustment", value=1.00)
-    home_adj = st.number_input("Home/Away Adjustment", value=1.00)
-
-std = st.number_input(
-    "Standard Deviation (Normal stats only)",
-    value=4.5
+mean = expected_stat(
+    minutes_proj=player_row['minutes_proj'],
+    stat_per_min=player_row[stat_per_min_col],
+    recent_form_adj=player_row[recent_form_col],
+    usage_adj=player_row['usage_adj'],
+    opp_def_adj=player_row['opp_def_adj'],
+    pace_adj=player_row['pace_adj'],
+    home_adj=player_row['home_adj']
 )
 
-if st.button("Calculate Probability"):
+std_default = {
+    "PTS": 5,
+    "REB": 3,
+    "AST": 3,
+    "FG3M": 1.5,
+    "STL": 1.2,
+    "BLK": 1.2,
+    "TOV": 1.5
+}
 
-    mean = expected_stat(
-        minutes,
-        stat_per_min,
-        recent_form,
-        usage_adj,
-        opp_def_adj,
-        pace_adj,
-        home_adj
-    )
+std = std_default.get(stat_type, 4)
 
-    prob_over = probability_over(mean, line, stat_type, std)
-    implied = implied_probability(odds)
-    edge = prob_over - implied
+prob_over = probability_over(mean, line, stat_type, std)
+implied = implied_probability(odds)
+edge = prob_over - implied
 
-    st.subheader("Results")
-
-    col1, col2, col3 = st.columns(3)
-
-    col1.metric("Projected Mean", round(mean,2))
-    col2.metric("Model Probability (Over)", f"{prob_over:.2%}")
-    col3.metric("Edge", f"{edge:.2%}")
+st.subheader("Results")
+col1, col2, col3 = st.columns(3)
+col1.metric("Projected Mean", round(mean,2))
+col2.metric("Model Probability (Over)", f"{prob_over:.2%}")
+col3.metric("Edge vs Odds", f"{edge:.2%}")
